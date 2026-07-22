@@ -1,0 +1,362 @@
+#import "lib/const.typ": CIRCLE, EVERY_PAGE, EXAM, FIRST_PAGE, HANDOUTS, ODD_PAGE, TEXT
+#import "lib/counter.typ": counter-chapter, counter-question, counter-title
+#import "lib/config.typ": a3, a4, heiti, kaiti, roman
+#import "lib/tools.typ": emph-dot, page-restart, tag, text-figure, zh-arabic
+#import "lib/choice.typ": choices
+#import "lib/question.typ": per-pts, question, sec-pts, sec-q-cnt, set-per-pts, tot-pts, tot-q-cnt
+#import "lib/paren-fillin.typ": fillin, fillinn, paren, parenn
+#import "lib/outline.typ": (
+  chapter, cover, draft, exam-info, exam-type, notice, score, score-box, secret, solution, solution-block, subject,
+  title,
+)
+
+#let setup(
+  mode: HANDOUTS,
+  paper: a4,
+  page-numbering: auto,
+  page-align: center,
+  gap: 1in,
+  show-gap-line: false,
+  footer-is-separate: true,
+  outline-page-numbering: "I",
+  outline-chapter-width: auto,
+  outline-chapter-weight: 700,
+  outline-chapter-color: purple,
+  font: roman,
+  font-size: 11pt,
+  line-height: 2em,
+  par-spacing: 2em,
+  par-justify: true,
+  first-line-indent: 0em,
+  heading-numbering: auto,
+  heading-hanging-indent: auto,
+  h1-size: auto,
+  heading-font: heiti,
+  heading-color: black,
+  heading-top: 10pt,
+  heading-bottom: 15pt,
+  enum-numbering: "（1.i.a）",
+  enum-spacing: 2em,
+  enum-indent: 0pt,
+  list-marker: ([•], [‣], [–]),
+  list-spacing: auto,
+  list-indent: 0pt,
+  ref-color: rgb("#0a6e96"),
+  resume: true,
+  watermark: none,
+  watermark-color: rgb("#f666"),
+  watermark-font: roman,
+  watermark-size: 88pt,
+  watermark-rotate: -45deg,
+  show-answer: false,
+  answer-color: blue,
+  show-seal-line: true,
+  seal-line-student-info: (
+    姓名: underline[~~~~~~~~~~~~~],
+    考生号: table(
+      columns: 14,
+      inset: .8em,
+      [],
+    ),
+    考场号: table(
+      columns: 2,
+      inset: .8em,
+      [],
+    ),
+    座位号: table(
+      columns: 2,
+      inset: .8em,
+      [],
+    ),
+  ),
+  seal-line-type: "dashed",
+  seal-line-decoration: none,
+  seal-line-supplement: "弥封线内不得答题",
+  seal-line-scope: EVERY_PAGE,
+  doc,
+) = {
+  assert(mode in (HANDOUTS, EXAM), message: "mode expected " + HANDOUTS + ", " + EXAM)
+  assert(
+    type(font) == array and type(heading-font) == array,
+    message: "font must be an array, e.g., ('heiti', ...)",
+  )
+  import "lib/state.typ": *
+  mode-state.update(mode)
+  import "lib/const.typ": OUTLINE, SOLUTION
+  let mode-config = (
+    { EXAM }: (
+      page-numbering: zh-arabic(prefix: context {
+        [#subject-state.get()]
+        if (mode-state.get() == SOLUTION) [参考答案] else [试题]
+      }),
+      outline-target: <chapter>,
+      heading-numbering: (..item) => numbering("一、", ..item) + h(-.3em),
+      heading-hanging-indent: 2em,
+      heading-offset: 0,
+      h1-size: 11pt,
+    ),
+    { HANDOUTS }: (
+      page-numbering: "1 / 1",
+      outline-target: heading,
+      heading-numbering: (..item) => numbering("1.", ..item.filter(v => v > 0)),
+      heading-hanging-indent: auto,
+      heading-offset: 1,
+      h1-size: 1.2em,
+    ),
+  ).at(mode)
+
+  if page-numbering == auto { page-numbering = mode-config.page-numbering }
+  // 除目录页的页码检测：包含两个1,两个1中间不能是连续空格、包含数字
+  let is-match = (
+    [#page-numbering].func() == [#zh-arabic].func()
+      or (
+        type(page-numbering) == str and regex("(?i)^\D*[1i]\D*[^\d\s]\D*[1i]\D*$") in page-numbering
+      )
+  )
+
+  let seal-line = if mode == EXAM and show-seal-line {
+    assert(
+      seal-line-scope in (EVERY_PAGE, FIRST_PAGE, ODD_PAGE),
+      message: "seal-line-scope expected " + EVERY_PAGE + ", " + FIRST_PAGE + ", " + ODD_PAGE,
+    )
+    assert(
+      seal-line-decoration in (TEXT, CIRCLE, none),
+      message: "seal-line-decoration expected" + TEXT + ", " + CIRCLE + ", " + none,
+    )
+    import "lib/tools.typ": _create-seal
+    _create-seal = _create-seal.with(
+      line-type: seal-line-type,
+      decoration: seal-line-decoration,
+      supplement: seal-line-supplement,
+      rotate-deg: -90deg,
+      rotate-origin: left + bottom,
+    )
+    let seal = (first: _create-seal(info: seal-line-student-info))
+    if seal-line-scope != FIRST_PAGE {
+      seal.insert("left", _create-seal())
+      if seal-line-scope == EVERY_PAGE {
+        seal.insert("right", _create-seal(rotate-deg: 90deg, rotate-origin: right + bottom))
+      }
+    }
+    seal
+  }
+
+  let is-odd-r-even-l = page-align == "odd-r-even-l"
+  let _footer(page-format, page-is-match: false) = context {
+    let margin = page.margin
+    let flipped = page.flipped
+    let columns = page.columns
+    let footer-is-separate = page.columns == 2 and footer-is-separate and not is-odd-r-even-l
+    if page-format == none { return }
+    let (current-chapter-start-page, total-page) = chapter-pages-state
+      .final()
+      .at(counter-title.get().first() - 1, default: (1, ..counter(page).final()))
+
+    let current = counter(page).get()
+    if page-is-match { current.push(total-page) }
+    let _numbering = numbering(page-format, ..current)
+    // 处于分栏下且左右页脚分离
+    if footer-is-separate {
+      current.first() += 1
+      grid(
+        columns: (1fr, 1fr),
+        align: center,
+        // 左页码
+        _numbering,
+        // 右页码
+        numbering(page-format, ..current),
+      )
+      counter(page).step()
+    } else {
+      // 页面的页脚是未分离, 则让奇数页在右侧，偶数页在左侧
+      align(
+        if is-odd-r-even-l {
+          if calc.odd(current.first()) { right } else { left }
+        } else { page-align },
+        _numbering,
+      )
+    }
+
+    // 弥封线
+    let _mode = mode-state.get()
+    if _mode == EXAM and seal-line != none and not _mode == OUTLINE {
+      let current-page = current.first()
+      let width = page.height
+      if flipped {
+        width = page.width
+        if footer-is-separate { current-page -= 1 }
+      }
+
+      place(
+        bottom,
+        dx: -1em,
+        dy: -margin,
+        block(width: width - margin * 2)[
+          //当前章节第一页弥封线
+          #if current-page == current-chapter-start-page {
+            seal-line.first
+            return
+          }
+
+          #if seal-line-scope == FIRST_PAGE { return }
+
+          // 其它页码是否加弥封线的算法
+          #(current-page -= current-chapter-start-page - 1) // 在组多套试卷时，重新把页码按照1，2，3，4... 重新计算
+          // 分页时，一页纸页码增加 2
+          #if flipped and footer-is-separate {
+            current-page = calc.ceil(current-page / 2)
+          }
+
+          #if calc.odd(current-page) {
+            seal-line.left
+            return
+          }
+
+          #if seal-line-scope == ODD_PAGE { return }
+
+          #move(
+            dx: if flipped { page.height } else { page.width } - margin * 2 - 100% + 2em,
+            seal-line.right,
+          )
+        ],
+      )
+    }
+  }
+
+  let gap-line = context if page.columns > 1 and show-gap-line {
+    line(angle: 90deg, length: 100% - page.margin * 2, stroke: .5pt)
+  }
+
+  watermark = context if watermark != none {
+    let paper-columns = paper.columns
+    place(horizon)[
+      #set par(leading: .5em)
+      #set text(watermark-size, watermark-color, font: watermark-font)
+      #grid(
+        columns: paper-columns * (1fr,),
+        ..paper-columns * (rotate(watermark-rotate, watermark),),
+      )
+    ]
+  }
+
+  set page(
+    ..a4 + paper,
+    background: gap-line,
+    foreground: watermark,
+    footer: _footer(
+      page-numbering,
+      page-is-match: is-match,
+    ),
+  )
+  set columns(gutter: gap)
+
+  set outline(
+    target: mode-config.outline-target,
+    title: text(1.5em)[#h(1fr)目#h(1em)录#h(1fr)],
+  )
+
+  // 讲义模式下小节调用统计分数，题量等，目录的分数题量在目录页正确显示的设置
+  show outline.entry: it => {
+    let ele = it.element
+    if ele.depth != 1 { return it }
+    let offset = ele.offset
+    if offset == 0 {
+      link(
+        it.element.location(),
+        it.indented(
+          box(
+            align(text(it.prefix().child, white, weight: outline-chapter-weight, 1.1em), right),
+            width: outline-chapter-width,
+            fill: outline-chapter-color,
+            radius: (left: 5pt),
+            inset: 4pt,
+          ),
+          [#box(
+              text(it.body().child, weight: outline-chapter-weight, outline-chapter-color, 1.1em),
+              fill: outline-chapter-color.opacify(-92%),
+              inset: (x: 2pt, y: 4pt),
+            ) #box(width: 1fr, repeat(".", gap: .15em)) #it.page()],
+        ),
+      )
+      // 新的章节则将 heading counter 更新为 0，chapter counter 加 1
+      counter-chapter.step()
+      counter(heading).update(0)
+    } else {
+      it
+    }
+
+    // 除了章节外的一级标题更新 heading counter
+    if offset == 1 {
+      counter(heading).step()
+    }
+  }
+
+  show outline: it => {
+    set page(footer: _footer(outline-page-numbering))
+    set par(justify: true)
+    set heading(offset: 0)
+    mode-state.update(OUTLINE)
+    it
+    pagebreak(weak: true)
+    mode-state.update(mode)
+    counter(page).update(1)
+    // 讲义模式下，目录更新完毕后，heading,chapter counter 重置为 0
+    counter(heading).update(0)
+    counter-chapter.update(0)
+  }
+
+  set par(
+    leading: line-height,
+    spacing: par-spacing,
+    first-line-indent: (amount: first-line-indent, all: true),
+    justify: par-justify,
+  )
+  set text(font: font, font-size)
+
+  if heading-numbering == auto {
+    heading-numbering = mode-config.heading-numbering
+    heading-hanging-indent = mode-config.heading-hanging-indent
+  }
+  set heading(
+    numbering: heading-numbering,
+    hanging-indent: heading-hanging-indent,
+    offset: mode-config.heading-offset,
+  )
+  if h1-size == auto { h1-size = mode-config.h1-size }
+  show heading: it => {
+    set par(leading: 1.3em)
+    let _mode = mode-state.get()
+    let _size = if (
+      _mode in (EXAM, SOLUTION) and it.level == 1 or _mode in (HANDOUTS, SOLUTION) and it.level == 2
+    ) { h1-size } else if (
+      // 讲义模式下，由于设置了 offset = 1 导致1级变2，2变3，字体会降一级，这里设置回默认值
+      _mode == HANDOUTS and it.depth == 2
+    ) { 1.2em } else { 1em }
+
+    v(heading-top)
+    text(heading-color, font: heading-font + text.font, it, _size)
+    v(heading-bottom)
+    if not resume { counter-question.update(0) }
+  }
+
+  set enum(numbering: enum-numbering, spacing: enum-spacing, indent: enum-indent)
+  set list(marker: list-marker, spacing: list-spacing, indent: list-indent)
+  set table.cell(align: horizon + center, stroke: .5pt)
+  set underline(offset: .25em)
+  show ref: set text(ref-color)
+
+  set math.cases(gap: .75em)
+  set math.equation(numbering: "（1）", supplement: [EQ -]) if mode == HANDOUTS
+  show math.equation: set text(font: font, weight: "regular")
+  let space = h(.25em, weak: true)
+  show math.equation.where(block: false): it => space + math.display(it) + space
+  show "∥": [#space\/#h(-.2em)/#space]
+
+  if show-answer {
+    answer-state.update(true)
+    answer-color-state.update(answer-color)
+  }
+
+  doc
+}
+
